@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- Prevents mobile browsers from scaling the page -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>City Node Network</title>
+
+<!-- Load custom fonts from Google Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+
+<style>
+  /* Reset all default browser margins and padding */
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* Make the page fill the full screen with a dark background */
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #02040e;
+    cursor: crosshair;
+    font-family: 'Space Mono', monospace;
+    color: #c8d8f0;
+  }
+
+  /* All canvases stack on top of each other at full screen size */
+  canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  /* Canvas layer order — bg is bottom, scene is middle, gpu is on top */
+  #c-bg    { z-index: 1; }
+  #c-scene { z-index: 2; pointer-events: none; }
+  #c-gpu   { z-index: 2; }
+
+  /* Invisible layer that captures all mouse clicks and hover events */
+  #hit-layer {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 3; cursor: crosshair;
+  }
+
+  /* UI overlay sits on top of everything, pointer events disabled by default */
+  #ui {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 4; pointer-events: none;
+  }
+
+  /* Country switcher buttons centered at the top of the screen */
+  #map-switcher {
+    position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 0; pointer-events: all; z-index: 10;
+    border: 1px solid rgba(255,255,255,0.10); white-space: nowrap;
+  }
+
+  /* Base style for each country button */
+  .map-btn {
+    padding: 8px 15px;
+    font-family: 'Space Mono', monospace; font-size: 8px;
+    letter-spacing: .15em; text-transform: uppercase;
+    cursor: pointer; border: none;
+    background: rgba(2,4,18,0.88); color: #3a5570;
+    backdrop-filter: blur(12px);
+    transition: all 0.25s ease;
+    position: relative; overflow: hidden;
+  }
+  .map-btn:not(:last-child) { border-right: 1px solid rgba(255,255,255,0.10); }
+
+  /* Pseudo element used for the color overlay on each button */
+  .map-btn::before {
+    content: ''; position: absolute; inset: 0;
+    opacity: 0; transition: opacity 0.3s ease;
+  }
+
+  /* Each country button has its own flag color gradient overlay */
+  .map-btn.usa::before    { background: linear-gradient(135deg, rgba(60,59,110,.20), rgba(191,10,48,.10)); }
+  .map-btn.italy::before  { background: linear-gradient(135deg, rgba(0,146,70,.15), rgba(206,43,55,.10)); }
+  .map-btn.india::before  { background: linear-gradient(135deg, rgba(255,153,51,.15), rgba(19,136,8,.10)); }
+  .map-btn.brazil::before { background: linear-gradient(135deg, rgba(0,156,59,.15), rgba(255,223,0,.10)); }
+  .map-btn.japan::before  { background: linear-gradient(135deg, rgba(188,0,45,.20), rgba(255,255,255,.04)); }
+  .map-btn.germany::before{ background: linear-gradient(135deg, rgba(20,10,0,.30), rgba(221,0,0,.12), rgba(255,206,0,.08)); }
+  .map-btn.nigeria::before{ background: linear-gradient(135deg, rgba(0,136,0,.18), rgba(255,255,255,.04)); }
+
+  /* Hover and active states for buttons */
+  .map-btn:hover              { color: rgba(255,255,255,.7); }
+  .map-btn:hover::before      { opacity: .6; }
+  .map-btn.active             { color: #fff; }
+  .map-btn.active::before     { opacity: 1; }
+
+  /* Each active country button gets its own accent color border and glow */
+  .map-btn.usa.active     { border-bottom: 2px solid #B22234; box-shadow: 0 0 22px rgba(178,34,52,.20) inset;  color: #e8c0c8; }
+  .map-btn.italy.active   { border-bottom: 2px solid #009246; box-shadow: 0 0 22px rgba(0,146,70,.20) inset;  color: #8dffc0; }
+  .map-btn.india.active   { border-bottom: 2px solid #FF9933; box-shadow: 0 0 22px rgba(255,153,51,.20) inset; color: #ffcc88; }
+  .map-btn.brazil.active  { border-bottom: 2px solid #009c3b; box-shadow: 0 0 22px rgba(0,200,80,.18) inset;  color: #aaff99; }
+  .map-btn.japan.active   { border-bottom: 2px solid #BC002D; box-shadow: 0 0 22px rgba(188,0,45,.22) inset;  color: #ffaaaa; }
+  .map-btn.germany.active { border-bottom: 2px solid #FFCE00; box-shadow: 0 0 22px rgba(255,206,0,.18) inset;  color: #ffe87a; }
+  .map-btn.nigeria.active { border-bottom: 2px solid #008800; box-shadow: 0 0 22px rgba(0,180,0,.18) inset;   color: #88ff88; }
+
+  .flag { margin-right: 4px; }
+
+  /* Full screen black overlay used for the fade transition between maps */
+  #transition-overlay {
+    position: absolute; inset: 0; z-index: 8;
+    background: #02040e; opacity: 0; pointer-events: none;
+    transition: opacity 0.22s ease;
+  }
+  /* Adding this class triggers the fade to black */
+  #transition-overlay.fading { opacity: 1; }
+
+  /* Country name and subtitle in the top left */
+  #header { position: absolute; top: 68px; left: 36px; }
+  #header h1 {
+    font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 800;
+    letter-spacing: .35em; text-transform: uppercase; opacity: .85;
+    transition: color 0.4s ease;
+  }
+  #header p { font-size: 9px; letter-spacing: .15em; margin-top: 4px; color: #3a5570; }
+
+  /* Bottom left status bar showing node count, edge count, and selected city */
+  #status-bar { position: absolute; bottom: 28px; left: 36px; font-size: 9px; color: #3a5570; letter-spacing: .15em; }
+  #status-bar span { transition: color 0.4s ease; }
+
+  /* Bottom right hint text */
+  #hint { position: absolute; bottom: 28px; right: 36px; font-size: 9px; color: #3a5570; letter-spacing: .15em; text-align: right; }
+
+  /* Notification cards container in the top right */
+  #notifications { position: absolute; top: 20px; right: 36px; width: 270px; display: flex; flex-direction: column; gap: 8px; }
+
+  /* Individual notification card style */
+  .notif {
+    background: rgba(2,8,24,.88); border: 1px solid #00e5ff; border-left: 3px solid #00e5ff;
+    padding: 12px 14px; backdrop-filter: blur(12px);
+    animation: nIn .3s cubic-bezier(.22,1,.36,1) forwards;
+  }
+  .notif.exit { animation: nOut .4s ease forwards; }
+  .notif-city   { font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+  .notif-region { font-size: 9px; color: #3a5570; margin-top: 4px; letter-spacing: .1em; }
+  .notif-data   { font-size: 9px; color: #8aabb0; margin-top: 6px; }
+
+  /* Slide in from right animation when card appears */
+  @keyframes nIn  { from { opacity: 0; transform: translateX(18px) } to { opacity: 1; transform: none } }
+  /* Slide out to right animation when card disappears */
+  @keyframes nOut { from { opacity: 1; transform: none } to { opacity: 0; transform: translateX(18px) } }
+
+  /* Tooltip that follows the mouse and shows the city name on hover */
+  #tooltip {
+    position: absolute; pointer-events: none;
+    background: rgba(2,8,24,.9); border: 1px solid currentColor;
+    padding: 7px 12px; font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    display: none; white-space: nowrap;
+    transform: translate(14px, -50%);
+    transition: color 0.3s, border-color 0.3s;
+  }
+  /* Small square dot on the left side of the tooltip */
+  #tooltip::before {
+    content: ''; position: absolute; left: -5px; top: 50%;
+    transform: translateY(-50%); width: 4px; height: 4px; background: currentColor;
+  }
+</style>
+</head>
+<body>
+
+<!-- Full screen overlay for the fade to black transition between maps -->
+<div id="transition-overlay"></div>
+
+<!-- Three canvas layers stacked on top of each other -->
+<canvas id="c-bg"></canvas>    <!-- Background layer: sky, beams, stars -->
+<canvas id="c-scene"></canvas> <!-- Scene layer: nodes and edges (Canvas 2D) -->
+<canvas id="c-gpu"></canvas>   <!-- GPU layer: WebGPU rendering if available -->
+
+<!-- Invisible div that captures all mouse input -->
+<div id="hit-layer"></div>
+
+<!-- All visible UI elements -->
+<div id="ui">
+
+  <!-- Country selection buttons at the top center -->
+  <div id="map-switcher">
+    <button class="map-btn usa active" onclick="switchMap('usa')">    <span class="flag">🇺🇸</span>USA    </button>
+    <button class="map-btn italy"      onclick="switchMap('italy')">  <span class="flag">🇮🇹</span>ITALY  </button>
+    <button class="map-btn india"      onclick="switchMap('india')">  <span class="flag">🇮🇳</span>INDIA  </button>
+    <button class="map-btn brazil"     onclick="switchMap('brazil')"> <span class="flag">🇧🇷</span>BRAZIL </button>
+    <button class="map-btn japan"      onclick="switchMap('japan')">  <span class="flag">🇯🇵</span>JAPAN  </button>
+    <button class="map-btn germany"    onclick="switchMap('germany')"><span class="flag">🇩🇪</span>GERMANY</button>
+    <button class="map-btn nigeria"    onclick="switchMap('nigeria')"><span class="flag">🇳🇬</span>NIGERIA</button>
+  </div>
+
+  <!-- Country title and subtitle in the top left -->
+  <div id="header">
+    <h1 id="map-title">USA NODE NETWORK</h1>
+    <p  id="map-sub">INTERACTIVE / REAL-TIME TOPOLOGY</p>
+  </div>
+
+  <!-- Notification cards appear here when a city is clicked -->
+  <div id="notifications"></div>
+
+  <!-- Bottom left stats bar -->
+  <div id="status-bar">
+    NODES: <span id="sn">0</span>
+    &nbsp;|&nbsp;
+    EDGES: <span id="se">0</span>
+    &nbsp;|&nbsp;
+    SELECTED: <span id="ss">NONE</span>
+  </div>
+
+  <!-- Bottom right instruction hint -->
+  <div id="hint">CLICK A NODE TO SELECT</div>
+
+  <!-- Tooltip that appears when hovering over a city -->
+  <div id="tooltip"></div>
+
+</div>
+
+<!-- Load the TypeScript entry point — Vite compiles this automatically -->
+<script type="module" src="/src/Main.ts"></script>
+
+</body>
+</html>
